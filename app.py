@@ -6,15 +6,15 @@ from imutils.perspective import four_point_transform
 from imutils import contours
 
 # --- 1. CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Corretor Multi-Provas", page_icon="📚")
+st.set_page_config(page_title="Corretor automático ECAM", page_icon="📚")
 
 # --- 2. BANCO DE GABARITOS (AQUI VOCÊ EDITA) ---
 # Estrutura: "Nome da Prova": { Questão: (Índice_Resposta, Pontos) }
-# 0=A, 1=B, 2=C, 3=D, 4=E
+# 0=A, 1=B, 2=C, 3=D
 BANCO_DE_PROVAS = {
-    "Matemática 9º Ano (Recuperação)": {
+    "Matemática 9º Ano (Teste)": {
         0: (1, 150.0), # Q1: B
-        1: (4, 320.0), # Q2: E
+        1: (3, 320.0), # Q2: D
         2: (0, 100.0), # Q3: A
         3: (3, 500.0), # Q4: D
         4: (1, 200.0)  # Q5: B
@@ -24,7 +24,7 @@ BANCO_DE_PROVAS = {
         1: (2, 200.0), # Q2: C
         2: (2, 200.0), # Q3: C
         3: (1, 200.0), # Q4: B
-        4: (4, 200.0)  # Q5: E
+        4: (3, 200.0)  # Q5: D
     },
     "Ciências 7º Ano": {
         0: (3, 100.0), # Q1: D
@@ -34,7 +34,7 @@ BANCO_DE_PROVAS = {
         4: (2, 350.0)  # Q5: C
     }
 }
-ALTERNATIVAS = 5
+ALTERNATIVAS = 4
 
 # --- FUNÇÃO DE PROCESSAMENTO (Adaptada para receber o gabarito escolhido) ---
 def processar_imagem(image, gabarito_config):
@@ -119,11 +119,11 @@ def processar_imagem(image, gabarito_config):
     return correct_score, paper_draw, None
 
 # --- INTERFACE VISUAL ---
-st.title("🏫 Corretor Escolar")
+st.title("🏫 Leitor de Gabaritos ECAM")
 
 # 1. MENU DE SELEÇÃO (A novidade está aqui)
 nome_prova = st.selectbox(
-    "Selecione a Prova para corrigir:",
+    "Selecione a prova e a turma para prosseguir com a correção:",
     list(BANCO_DE_PROVAS.keys())
 )
 
@@ -157,3 +157,4 @@ if img_file_buffer is not None:
         
         if nota_final == max_nota:
             st.balloons()
+
