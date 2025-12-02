@@ -4,6 +4,4 @@ numpy
 imutils
 pillow
 scipy
-scikit-image
-gspread
-oauth2client
+pandas
