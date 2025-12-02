@@ -27,12 +27,12 @@ ALTERNATIVAS = 5
 
 # --- 3. FUNÇÃO DE VISÃO COMPUTACIONAL ---
 def processar_imagem(image, gabarito_config):
-    # Conversão para Cinza e Blur
+    # 1. Pré-processamento
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edged = cv2.Canny(blurred, 75, 200)
 
-    # Achar contornos do papel
+    # 2. Achar os cantos do papel
     cnts = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
     docCnt = None
@@ -47,64 +47,92 @@ def processar_imagem(image, gabarito_config):
                 break
     
     if docCnt is None:
-        return None, None, "Bordas não encontradas. Use fundo escuro."
+        return None, None, "Não achei os 4 cantos do gabarito."
 
-    # Perspectiva
+    # 3. Endireitar a imagem (Perspectiva)
     paper = four_point_transform(image, docCnt.reshape(4, 2))
     warped = four_point_transform(gray, docCnt.reshape(4, 2))
     thresh = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
 
-    # Achar bolinhas
+    # 4. Achar bolinhas
     cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cnts = imutils.grab_contours(cnts)
     questionCnts = []
 
+    # Filtra apenas o que tem formato de bolinha
     for c in cnts:
         (x, y, w, h) = cv2.boundingRect(c)
         ar = w / float(h)
-        if w >= 20 and h >= 20 and ar >= 0.9 and ar <= 1.1:
+        if w >= 20 and h >= 20 and ar >= 0.8 and ar <= 1.2:
             questionCnts.append(c)
 
-    if not questionCnts:
-        return None, None, "Nenhuma resposta detectada."
+    # Verifica se achou bolinhas suficientes (esperamos 200 bolinhas para 40 questões)
+    # Mas aceitamos menos caso a foto esteja cortada
+    if len(questionCnts) < 20: 
+        return None, None, "Não detecei bolinhas suficientes."
 
-    try:
-        questionCnts = contours.sort_contours(questionCnts, method="top-to-bottom")[0]
-    except:
-        return None, None, "Erro na leitura das linhas."
+    # 5. ORDENAÇÃO INTELIGENTE (LINHA POR LINHA)
+    # Ordena de cima para baixo. Agora cada "linha" terá 10 bolinhas (5 da esq, 5 da dir)
+    questionCnts = contours.sort_contours(questionCnts, method="top-to-bottom")[0]
 
-    # Correção
     correct_score = 0.0
     paper_draw = paper.copy()
     
-    for (q, i) in enumerate(np.arange(0, len(questionCnts), ALTERNATIVAS)):
-        if q not in gabarito_config:
-            break
+    # Como são 2 colunas, processamos em blocos de 10 bolinhas por linha
+    # Passo de 10 em 10 (5 alternativas da Q1 + 5 alternativas da Q21)
+    for (q_idx, i) in enumerate(np.arange(0, len(questionCnts), 10)):
+        
+        # Pega as 10 bolinhas da linha (pode pegar menos se for o final)
+        linha_bolinhas = questionCnts[i:i + 10]
+        
+        # Ordena essas 10 bolinhas da Esquerda para a Direita
+        try:
+            linha_bolinhas = contours.sort_contours(linha_bolinhas, method="left-to-right")[0]
+        except:
+            continue # Pula se der erro na linha
+
+        # SEPARA AS COLUNAS
+        # As primeiras 5 são da Coluna 1 (Ex: Questão 1)
+        # As últimas 5 são da Coluna 2 (Ex: Questão 21)
+        
+        grupos = []
+        # Grupo 1: Questão da Esquerda (Índice q_idx) -> Ex: Q0 (que é a 1)
+        if len(linha_bolinhas) >= 5:
+            grupos.append((q_idx, linha_bolinhas[0:5]))
             
-        cnts_row = contours.sort_contours(questionCnts[i:i + ALTERNATIVAS])[0]
-        bubbled = None
+        # Grupo 2: Questão da Direita (Índice q_idx + 20) -> Ex: Q20 (que é a 21)
+        if len(linha_bolinhas) >= 10:
+            grupos.append((q_idx + 20, linha_bolinhas[5:10]))
 
-        for (j, c) in enumerate(cnts_row):
-            mask = np.zeros(thresh.shape, dtype="uint8")
-            cv2.drawContours(mask, [c], -1, 255, -1)
-            mask = cv2.bitwise_and(thresh, thresh, mask=mask)
-            total = cv2.countNonZero(mask)
+        # --- CORREÇÃO DOS GRUPOS ---
+        for (numero_questao, cnts_alternativas) in grupos:
+            if numero_questao not in gabarito_config:
+                continue
 
-            if bubbled is None or total > bubbled[0]:
-                bubbled = (total, j)
+            bubbled = None
+            
+            # Verifica qual bolinha foi marcada
+            for (j, c) in enumerate(cnts_alternativas):
+                mask = np.zeros(thresh.shape, dtype="uint8")
+                cv2.drawContours(mask, [c], -1, 255, -1)
+                mask = cv2.bitwise_and(thresh, thresh, mask=mask)
+                total = cv2.countNonZero(mask)
 
-        k = gabarito_config[q][0]
-        valor = gabarito_config[q][1]
-        color = (0, 0, 255)
+                if bubbled is None or total > bubbled[0]:
+                    bubbled = (total, j)
 
-        if k == bubbled[1]:
-            color = (0, 255, 0)
-            correct_score += valor
+            # Nota e Gabarito
+            k = gabarito_config[numero_questao][0]
+            valor = gabarito_config[numero_questao][1]
+            color = (0, 0, 255) # Vermelho
 
-        cv2.drawContours(paper_draw, [cnts_row[k]], -1, color, 3)
+            if k == bubbled[1]:
+                color = (0, 255, 0) # Verde
+                correct_score += valor
+
+            cv2.drawContours(paper_draw, [cnts_alternativas[k]], -1, color, 3)
 
     return correct_score, paper_draw, None
-
 # --- 4. INTERFACE DO APP ---
 st.title("🏫 Corretor com Planilha")
 
@@ -188,4 +216,5 @@ if len(st.session_state['historico_notas']) > 0:
     )
 else:
     st.info("Nenhuma nota salva ainda. Corrija uma prova e clique em 'Adicionar à Tabela'.")
+
 
