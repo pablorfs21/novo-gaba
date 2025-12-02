@@ -72,46 +72,41 @@ def processar_imagem(image, gabarito_config):
         return None, None, "Não detecei bolinhas suficientes."
 
     # 5. ORDENAÇÃO INTELIGENTE (LINHA POR LINHA)
-    # Ordena de cima para baixo. Agora cada "linha" terá 10 bolinhas (5 da esq, 5 da dir)
+   # 5. ORDENAÇÃO E CORREÇÃO (Lógica Ajustada para 30 Questões)
     questionCnts = contours.sort_contours(questionCnts, method="top-to-bottom")[0]
 
     correct_score = 0.0
     paper_draw = paper.copy()
     
-    # Como são 2 colunas, processamos em blocos de 10 bolinhas por linha
-    # Passo de 10 em 10 (5 alternativas da Q1 + 5 alternativas da Q21)
+    # Processa linha por linha (cada linha tem 10 bolinhas: 5 da esq + 5 da dir)
     for (q_idx, i) in enumerate(np.arange(0, len(questionCnts), 10)):
         
-        # Pega as 10 bolinhas da linha (pode pegar menos se for o final)
         linha_bolinhas = questionCnts[i:i + 10]
         
-        # Ordena essas 10 bolinhas da Esquerda para a Direita
+        # Ordena da esquerda para a direita
         try:
             linha_bolinhas = contours.sort_contours(linha_bolinhas, method="left-to-right")[0]
         except:
-            continue # Pula se der erro na linha
+            continue 
 
-        # SEPARA AS COLUNAS
-        # As primeiras 5 são da Coluna 1 (Ex: Questão 1)
-        # As últimas 5 são da Coluna 2 (Ex: Questão 21)
-        
         grupos = []
-        # Grupo 1: Questão da Esquerda (Índice q_idx) -> Ex: Q0 (que é a 1)
+        
+        # COLUNA 1: Questão atual (q_idx) -> Ex: 0 vira Q1
         if len(linha_bolinhas) >= 5:
             grupos.append((q_idx, linha_bolinhas[0:5]))
             
-        # Grupo 2: Questão da Direita (Índice q_idx + 20) -> Ex: Q20 (que é a 21)
+        # COLUNA 2: Questão da direita (q_idx + 15) -> Ex: 0 vira Q16
         if len(linha_bolinhas) >= 10:
-            grupos.append((q_idx + 20, linha_bolinhas[5:10]))
+            grupos.append((q_idx + 15, linha_bolinhas[5:10]))
 
-        # --- CORREÇÃO DOS GRUPOS ---
+        # --- CORREÇÃO (Igual ao anterior) ---
         for (numero_questao, cnts_alternativas) in grupos:
+            # Pula se a questão não estiver no gabarito (ex: se só configurou até a 10)
             if numero_questao not in gabarito_config:
                 continue
 
             bubbled = None
             
-            # Verifica qual bolinha foi marcada
             for (j, c) in enumerate(cnts_alternativas):
                 mask = np.zeros(thresh.shape, dtype="uint8")
                 cv2.drawContours(mask, [c], -1, 255, -1)
@@ -121,19 +116,18 @@ def processar_imagem(image, gabarito_config):
                 if bubbled is None or total > bubbled[0]:
                     bubbled = (total, j)
 
-            # Nota e Gabarito
             k = gabarito_config[numero_questao][0]
             valor = gabarito_config[numero_questao][1]
-            color = (0, 0, 255) # Vermelho
+            color = (0, 0, 255) 
 
             if k == bubbled[1]:
-                color = (0, 255, 0) # Verde
+                color = (0, 255, 0)
                 correct_score += valor
 
             cv2.drawContours(paper_draw, [cnts_alternativas[k]], -1, color, 3)
 
     return correct_score, paper_draw, None
-# --- 4. INTERFACE DO APP ---
+    
 st.title("🏫 Corretor com Planilha")
 
 # --- BARRA LATERAL (INPUTS) ---
@@ -216,5 +210,6 @@ if len(st.session_state['historico_notas']) > 0:
     )
 else:
     st.info("Nenhuma nota salva ainda. Corrija uma prova e clique em 'Adicionar à Tabela'.")
+
 
 
