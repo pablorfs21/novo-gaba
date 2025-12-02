@@ -4,102 +4,156 @@ import numpy as np
 import imutils
 from imutils.perspective import four_point_transform
 from imutils import contours
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
 
-# --- 1. CONFIGURAÇÃO E CONEXÃO COM GOOGLE SHEETS ---
-st.set_page_config(page_title="Corretor & Banco", page_icon="💾")
+# --- 1. CONFIGURAÇÃO DA PÁGINA ---
+st.set_page_config(page_title="Corretor Multi-Provas", page_icon="📚")
 
-# Tenta conectar com o Google Sheets
-try:
-    # Procura as credenciais nos Segredos do Streamlit
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # Se você colou o JSON puro nos secrets com o nome "gcp_service_account":
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
-    client = gspread.authorize(creds)
-    
-    # Abre a planilha pelo nome (Tem que ser EXATAMENTE o nome da sua planilha no Google)
-    sheet = client.open("Notas Provas").sheet1 
-    CONEXAO_OK = True
-except Exception as e:
-    CONEXAO_OK = False
-    ERRO_CONEXAO = e
-
-# --- 2. BANCO DE GABARITOS ---
+# --- 2. BANCO DE GABARITOS (AQUI VOCÊ EDITA) ---
+# Estrutura: "Nome da Prova": { Questão: (Índice_Resposta, Pontos) }
+# 0=A, 1=B, 2=C, 3=D, 4=E
 BANCO_DE_PROVAS = {
-    "Matemática 9º Ano": {
-        0: (1, 150.0), 1: (4, 320.0), 2: (0, 100.0), 3: (3, 500.0), 4: (1, 200.0)
+    "Matemática 9º Ano (Recuperação)": {
+        0: (1, 150.0), # Q1: B
+        1: (4, 320.0), # Q2: E
+        2: (0, 100.0), # Q3: A
+        3: (3, 500.0), # Q4: D
+        4: (1, 200.0)  # Q5: B
     },
-    "Ciências 8º Ano": {
-        0: (0, 200.0), 1: (2, 200.0), 2: (2, 200.0), 3: (1, 200.0), 4: (4, 200.0)
+    "Matemática 8º Ano (Bimestral)": {
+        0: (0, 200.0), # Q1: A
+        1: (2, 200.0), # Q2: C
+        2: (2, 200.0), # Q3: C
+        3: (1, 200.0), # Q4: B
+        4: (4, 200.0)  # Q5: E
+    },
+    "Ciências 7º Ano": {
+        0: (3, 100.0), # Q1: D
+        1: (3, 100.0), # Q2: D
+        2: (1, 100.0), # Q3: B
+        3: (0, 350.0), # Q4: A
+        4: (2, 350.0)  # Q5: C
     }
 }
 ALTERNATIVAS = 5
 
-# --- FUNÇÃO DE PROCESSAMENTO (IGUAL À ANTERIOR) ---
+# --- FUNÇÃO DE PROCESSAMENTO (Adaptada para receber o gabarito escolhido) ---
 def processar_imagem(image, gabarito_config):
-    # (Copie a função processar_imagem inteira do código anterior para cá)
-    # Para economizar espaço aqui, estou resumindo, mas você deve manter a lógica de visão computacional.
-    # ... [Todo o código do OpenCV aqui] ...
+    # 1. Pré-processamento
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.Canny(blurred, 75, 200)
+
+    # 2. Achar papel
+    cnts = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    docCnt = None
+
+    if len(cnts) > 0:
+        cnts = sorted(cnts, key=cv2.contourArea, reverse=True)
+        for c in cnts:
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            if len(approx) == 4:
+                docCnt = approx
+                break
     
-    # Simulação do retorno para o exemplo (SUBSTITUA PELA FUNÇÃO REAL):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) # Placeholder
-    return 850.0, image, None # Placeholder
+    if docCnt is None:
+        return None, None, "Não achei o papel. Use fundo escuro."
 
-# --- INTERFACE ---
-st.title("🏫 Sistema de Correção Integrado")
+    # 3. Perspectiva
+    paper = four_point_transform(image, docCnt.reshape(4, 2))
+    warped = four_point_transform(gray, docCnt.reshape(4, 2))
+    thresh = cv2.threshold(warped, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
 
-if not CONEXAO_OK:
-    st.error("⚠ Erro de conexão com o Banco de Dados (Google Sheets).")
-    st.warning("Verifique se configurou os 'Secrets' e compartilhou a planilha com o email do robô.")
-    st.code(str(ERRO_CONEXAO))
+    # 4. Achar bolinhas
+    cnts = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = imutils.grab_contours(cnts)
+    questionCnts = []
 
-# Menu Lateral para Dados do Aluno
-with st.sidebar:
-    st.header("📝 Dados do Aluno")
-    nome_aluno = st.text_input("Nome Completo")
-    turma = st.selectbox("Turma", ["9º A", "9º B", "8º A", "8º B"])
-    prova_selecionada = st.selectbox("Prova", list(BANCO_DE_PROVAS.keys()))
+    for c in cnts:
+        (x, y, w, h) = cv2.boundingRect(c)
+        ar = w / float(h)
+        if w >= 20 and h >= 20 and ar >= 0.9 and ar <= 1.1:
+            questionCnts.append(c)
 
-st.info(f"Corrigindo: **{prova_selecionada}**")
-gabarito_atual = BANCO_DE_PROVAS[prova_selecionada]
+    if not questionCnts:
+        return None, None, "Não achei as bolinhas."
 
-img_file_buffer = st.camera_input("Foto do Gabarito")
+    try:
+        questionCnts = contours.sort_contours(questionCnts, method="top-to-bottom")[0]
+    except:
+        return None, None, "Erro ao ordenar questões."
+
+    # --- CORREÇÃO DINÂMICA ---
+    correct_score = 0.0
+    paper_draw = paper.copy()
+    
+    # Usa o 'gabarito_config' que foi passado como parâmetro
+    for (q, i) in enumerate(np.arange(0, len(questionCnts), ALTERNATIVAS)):
+        if q not in gabarito_config:
+            break
+            
+        cnts_row = contours.sort_contours(questionCnts[i:i + ALTERNATIVAS])[0]
+        bubbled = None
+
+        for (j, c) in enumerate(cnts_row):
+            mask = np.zeros(thresh.shape, dtype="uint8")
+            cv2.drawContours(mask, [c], -1, 255, -1)
+            mask = cv2.bitwise_and(thresh, thresh, mask=mask)
+            total = cv2.countNonZero(mask)
+
+            if bubbled is None or total > bubbled[0]:
+                bubbled = (total, j)
+
+        # Pega os dados do gabarito selecionado
+        k = gabarito_config[q][0]     
+        valor = gabarito_config[q][1] 
+        color = (0, 0, 255)
+
+        if k == bubbled[1]:
+            color = (0, 255, 0)
+            correct_score += valor
+
+        cv2.drawContours(paper_draw, [cnts_row[k]], -1, color, 3)
+
+    return correct_score, paper_draw, None
+
+# --- INTERFACE VISUAL ---
+st.title("🏫 Corretor Escolar")
+
+# 1. MENU DE SELEÇÃO (A novidade está aqui)
+nome_prova = st.selectbox(
+    "Selecione a Prova para corrigir:",
+    list(BANCO_DE_PROVAS.keys())
+)
+
+# Pega a configuração baseada na escolha
+gabarito_selecionado = BANCO_DE_PROVAS[nome_prova]
+
+st.info(f"Corrigindo: **{nome_prova}**")
+
+# 2. CÂMERA
+img_file_buffer = st.camera_input("Tirar Foto")
 
 if img_file_buffer is not None:
     bytes_data = img_file_buffer.getvalue()
     cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
-    # Processamento
-    nota_tri, img_result, erro = processar_imagem(cv2_img, gabarito_atual)
-    # OBS: Lembre-se de colar a função processar_imagem completa lá em cima!
+    with st.spinner('Processando...'):
+        # Passamos o gabarito escolhido para a função
+        nota_tri, img_result, erro = processar_imagem(cv2_img, gabarito_selecionado)
 
     if erro:
-        st.error(erro)
+        st.error(f"Erro: {erro}")
     else:
         nota_final = int(round(nota_tri))
-        max_nota = int(sum([v[1] for k, v in gabarito_atual.items()]))
+        max_nota = int(sum([v[1] for k, v in gabarito_selecionado.items()]))
         
         col1, col2 = st.columns(2)
-        col1.metric("Nota Calculada", nota_final)
-        col2.metric("Valor Total", max_nota)
-        st.image(img_result, caption="Espelho", use_column_width=True)
-
-        # --- BOTÃO DE SALVAR ---
-        if CONEXAO_OK:
-            st.divider()
-            if st.button("💾 SALVAR NO BANCO DE DADOS", type="primary"):
-                if nome_aluno == "":
-                    st.warning("Por favor, digite o nome do aluno antes de salvar.")
-                else:
-                    try:
-                        # Adiciona linha na planilha: [Data, Nome, Turma, Prova, Nota]
-                        data_hoje = datetime.now().strftime("%d/%m/%Y %H:%M")
-                        linha = [data_hoje, nome_aluno, turma, prova_selecionada, nota_final]
-                        sheet.append_row(linha)
-                        
-                        st.success(f"Nota de {nome_aluno} salva com sucesso!")
-                        st.balloons()
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
+        col1.metric("Nota Aluno", f"{nota_final}")
+        col2.metric("Valor Prova", f"{max_nota}")
+        
+        st.image(img_result, caption="Correção", use_column_width=True)
+        
+        if nota_final == max_nota:
+            st.balloons()
