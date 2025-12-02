@@ -2,7 +2,8 @@ streamlit
 opencv-python-headless
 numpy
 imutils
-
 pillow
 scipy
 scikit-image
+gspread
+oauth2client
